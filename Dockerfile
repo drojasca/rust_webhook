@@ -1,5 +1,5 @@
 # Pin the Rust toolchain version used in the build stage.
-ARG RUST_VERSION=1.92
+ARG RUST_VERSION=1.94
 
 # Name of the compiled binary produced by Cargo (must match Cargo.toml package name).
 ARG APP_NAME=rust_webhook
@@ -18,7 +18,7 @@ ARG APP_NAME
 WORKDIR /app
 
 # Install build dependencies needed to compile Rust crates on Alpine
-RUN apk add --no-cache clang lld musl-dev git
+RUN apk add --no-cache clang lld musl-dev git pkgconfig
 
 # Build the application
 RUN --mount=type=bind,source=src,target=src \
