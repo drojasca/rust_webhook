@@ -18,7 +18,7 @@ ARG APP_NAME
 WORKDIR /app
 
 # Install build dependencies needed to compile Rust crates on Alpine
-RUN apk add --no-cache clang lld musl-dev git pkgconfig
+RUN apk add --no-cache clang lld musl-dev git
 
 # Build the application
 RUN --mount=type=bind,source=src,target=src \

@@ -4,21 +4,25 @@ services:
       context: .
       target: final
     depends_on:
-      queue:
+      rabbitmq:
         condition: service_healthy
       db:
         condition: service_healthy
+    ports:
+      - "3000:3000"
 
-  queue:
-    image: rabbitmq:latest
+  rabbitmq:
+    image: rabbitmq:management
+    ports:
+      - "5672:5672"  # RabbitMQ port
+      - "15672:15672"  # RabbitMQ management port
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_local_alarms"]
+      test: ["CMD", "rabbitmqctl", "status"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
-
-
 
   db:
     image: postgres
@@ -42,3 +46,7 @@ services:
     restart: always
     ports:
       - 8080:8080
+  
+volumes:
+  rabbitmq-data:
+    driver: local
