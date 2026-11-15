@@ -36,6 +36,9 @@ RUN --mount=type=bind,source=src,target=src \
 
 FROM docker.io/library/alpine:3.18 AS final
 
+# Install curl for making requests from inside the container.
+RUN apk add --no-cache curl
+
 # Create a non-privileged user (recommended best practice)
 ARG UID=10001
 RUN adduser \
