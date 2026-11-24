@@ -1,3 +1,5 @@
+mod api_key;
+
 use axum::{extract::State, routing::post, Json, Router};
 use jsonschema::Validator;
 use lapin::{Channel, Connection, ConnectionProperties};
