@@ -1,7 +1,8 @@
 CREATE TABLE IF NOT EXISTS api_keys (
-    key_hash TEXT PRIMARY KEY UNIQUE,
+    key_hash TEXT NOT NULL UNIQUE,
+    key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     permission TEXT NOT NULL
         CHECK (permission IN ('admin', 'subscribe', 'publish')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    client_id TEXT REFERENCES clients(client_id) ON DELETE CASCADE
+    last_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

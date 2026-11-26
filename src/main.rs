@@ -1,9 +1,10 @@
 mod api_key;
 
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use jsonschema::Validator;
 use lapin::{Channel, Connection, ConnectionProperties};
 use serde::Deserialize;
+use serde::Serialize;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use std::collections::HashMap;
 use std::error::Error;
@@ -14,9 +15,19 @@ struct EventType {
     event_schema: serde_json::Value,
 }
 
+#[derive(Serialize)]
+struct ApiKey {
+    api_key: String,
+}
+
 #[derive(Clone)]
 struct EventState {
     validators: HashMap<String, Validator>,
+}
+
+#[derive(Clone)]
+struct DatabaseState {
+    pool: Pool<Postgres>,
 }
 
 #[derive(Deserialize)]
@@ -32,9 +43,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let channel = initialize_rabbitmq().await?;
 
     let event_state = EventState { validators };
+    let database_state = DatabaseState { pool };
 
     let app: Router = Router::new()
-        .route("/event", post(event_handler).with_state(event_state));
+        .route("/event", post(event_handler).with_state(event_state))
+        .route(
+            "/create/subscribe",
+            post(create_sub_handler).with_state(database_state),
+        );
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 
@@ -94,4 +110,26 @@ async fn event_handler(
     } else {
         "Invalid\n"
     }
+}
+
+async fn create_sub_handler(
+    State(state): State<DatabaseState>,
+) -> Result<Json<ApiKey>, (StatusCode, &'static str)> {
+    let api_key = api_key::generate_api_key(api_key::Permission::Subscriber);
+    let key_hash = api_key::hash_key(&api_key);
+
+    let _ = sqlx::query!(
+        "INSERT INTO api_keys (key_hash, permission)
+        VALUES ($1, $2)",
+        key_hash,
+        "subscribe"
+    )
+    .execute(&state.pool)
+    .await
+    .map(|err| {
+        tracing::error!("Failed to execute query: {:?}", err);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    });
+    let res = ApiKey { api_key };
+    Ok(Json(res))
 }

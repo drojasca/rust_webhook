@@ -24,9 +24,10 @@ RUN apk add --no-cache clang lld musl-dev git
 RUN --mount=type=bind,source=src,target=src \
     --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
+    --mount=type=bind,source=.sqlx,target=.sqlx \
     --mount=type=cache,target=/app/target/ \
     --mount=type=cache,target=/var/cache/cargo \
-    CARGO_HOME=/var/cache/cargo cargo build --locked --release && \
+    CARGO_HOME=/var/cache/cargo SQLX_OFFLINE=true cargo build --locked --release && \
     cp ./target/release/$APP_NAME /bin/server
 
 ################################################################################
