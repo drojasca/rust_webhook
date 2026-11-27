@@ -2,7 +2,12 @@ mod api_key;
 mod auth;
 
 use axum::middleware::from_fn_with_state;
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{Extension, State},
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
 use jsonschema::Validator;
 use lapin::{Channel, Connection, ConnectionProperties};
 use serde::Deserialize;
@@ -10,6 +15,10 @@ use serde::Serialize;
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use std::collections::HashMap;
 use std::error::Error;
+
+use crate::auth::AuthUser;
+
+const UNIQUE_VIOLATION_SQLSTATE: &str = "23505";
 
 #[derive(Debug, sqlx::FromRow)]
 struct EventType {
@@ -22,14 +31,16 @@ struct ApiKey {
     api_key: String,
 }
 
-#[derive(Clone)]
-struct EventState {
-    validators: HashMap<String, Validator>,
+#[derive(Serialize)]
+struct SubId {
+    sub_id: String,
 }
 
 #[derive(Clone)]
-struct DatabaseState {
+struct AppState {
+    validators: HashMap<String, Validator>,
     pool: Pool<Postgres>,
+    queue: Channel,
 }
 
 #[derive(Deserialize)]
@@ -38,30 +49,42 @@ struct EventPayload {
     payload: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct SubscribePayload {
+    post_urls: Vec<String>,
+    event: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let pool = initialize_db().await?;
     let validators = initialize_event_schemas(&pool).await?;
     let channel = initialize_rabbitmq().await?;
 
-    let event_state = EventState { validators };
-    let database_state = DatabaseState { pool };
+    let app_state = AppState {
+        validators,
+        pool,
+        queue: channel,
+    };
 
     let app: Router = Router::new()
-        .route("/event", post(event_handler).with_state(event_state))
-        .route(
-            "/create/subscriber",
-            post(create_sub_handler).with_state(database_state.clone()),
-        )
+        .route("/event", post(event_handler))
+        .route("/create/subscriber", post(create_sub_handler))
         .route(
             "/create/publisher",
-            post(create_pub_handler)
-                .with_state(database_state.clone())
-                .layer(from_fn_with_state(
-                    database_state.clone(),
-                    auth::require_admin,
-                )),
-        );
+            post(create_pub_handler).layer(from_fn_with_state(
+                app_state.clone(),
+                auth::require_admin,
+            )),
+        )
+        .route(
+            "/subscribe",
+            post(sub_handler).layer(from_fn_with_state(
+                app_state.clone(),
+                auth::require_sub,
+            )),
+        )
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -110,7 +133,7 @@ async fn initialize_rabbitmq() -> Result<Channel, Box<dyn Error>> {
 }
 
 async fn event_handler(
-    State(state): State<EventState>,
+    State(state): State<AppState>,
     Json(body): Json<EventPayload>,
 ) -> &'static str {
     let Some(validator) = state.validators.get(&body.event_type) else {
@@ -125,7 +148,7 @@ async fn event_handler(
 }
 
 async fn create_sub_handler(
-    State(state): State<DatabaseState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiKey>, (StatusCode, &'static str)> {
     let api_key = api_key::generate_api_key(api_key::Permission::Subscriber);
     let key_hash = api_key::hash_key(&api_key);
@@ -147,7 +170,7 @@ async fn create_sub_handler(
 }
 
 async fn create_pub_handler(
-    State(state): State<DatabaseState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiKey>, (StatusCode, &'static str)> {
     let api_key = api_key::generate_api_key(api_key::Permission::Publisher);
     let key_hash = api_key::hash_key(&api_key);
@@ -160,10 +183,76 @@ async fn create_pub_handler(
     )
     .execute(&state.pool)
     .await
-    .map(|err| {
+    .map_err(|err| {
         tracing::error!("Failed to execute query: {:?}", err);
         (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
     });
     let res = ApiKey { api_key };
     Ok(Json(res))
+}
+
+async fn sub_handler(
+    Extension(auth_user): Extension<AuthUser>,
+    State(state): State<AppState>,
+    Json(body): Json<SubscribePayload>,
+) -> Result<Json<SubId>, (StatusCode, &'static str)> {
+    if !state.validators.contains_key(&body.event) {
+        return Err((StatusCode::BAD_REQUEST, "Unknown event"));
+    }
+    let mut tx = state.pool.begin().await.map_err(|err| {
+        tracing::error!("Failed to begin transaction: {:?}", err);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    })?;
+
+    let res = sqlx::query!(
+        "INSERT INTO subscriptions (key_id, event_type)
+            VALUES ($1, $2)
+            RETURNING sub_id",
+        &auth_user.key_id,
+        &body.event
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|err| {
+        let is_dup = err.as_database_error().is_some_and(|db_err| {
+            db_err.code().as_deref() == Some(UNIQUE_VIOLATION_SQLSTATE)
+                && db_err.constraint() == Some("subscriptions_pkey")
+        });
+        if is_dup {
+            return (StatusCode::CONFLICT, "Subscription already exists");
+        }
+        tracing::error!("Failed to create subscription: {:?}", err);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    })?;
+    let sub_id = res.sub_id.ok_or_else(|| {
+        tracing::error!("Created subscription without a sub_id");
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    })?;
+
+    for url in body.post_urls {
+        let _ = sqlx::query!(
+            "INSERT INTO subscription_urls (sub_id, post_url)
+            VALUES ($1, $2)",
+            sub_id,
+            url
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            tracing::error!(
+                "Failed to associate subscription with url: {:?}",
+                err
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+        })?;
+    }
+
+    tx.commit().await.map_err(|err| {
+        tracing::error!("Transaction Failed: {:?}", err);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    })?;
+
+    Ok(Json(SubId {
+        sub_id: sub_id.to_string(),
+    }))
 }

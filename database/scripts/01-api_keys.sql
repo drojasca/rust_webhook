@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS api_keys CASCADE;
+
 CREATE TABLE IF NOT EXISTS api_keys (
     key_hash TEXT NOT NULL UNIQUE,
     key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

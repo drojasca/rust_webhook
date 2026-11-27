@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS outbox CASCADE;
+
 CREATE TABLE IF NOT EXISTS outbox (
     event_id UUID PRIMARY KEY REFERENCES events(event_id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'Unpublished'

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO subscriptions (key_id, event_type)\n            VALUES ($1, $2)\n            RETURNING sub_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sub_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "subscriptions",
+            "name": "sub_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "eca80067e22e37a82f850175baec3bc1f149d1c849c49ad1f71b596e56d03a76"
+}

@@ -38,6 +38,15 @@ curl -i -X POST http://localhost:3000/create/publisher \
   -H 'bearer: YOUR_ADMIN_API_KEY'
 ```
 
+Subscribe a subscriber API key to an event and one or more webhook URLs:
+
+```sh
+curl -i -X POST http://localhost:3000/subscribe \
+  -H 'bearer: YOUR_SUBSCRIBER_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"post_urls":["https://example.com/webhooks/post-created"],"event":"post.created"}'
+```
+
 Other example requests, which can also be run from your host:
 
 Valid `post.created` payload (returns `Valid!`):

@@ -8,18 +8,19 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sqlx::types::Uuid;
+#[derive(Clone)]
 
 pub(crate) struct AuthUser {
     pub(crate) key_id: Uuid,
     pub(crate) permission: String,
 }
 
-impl FromRequestParts<crate::DatabaseState> for AuthUser {
+impl FromRequestParts<crate::AppState> for AuthUser {
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &crate::DatabaseState,
+        state: &crate::AppState,
     ) -> Result<Self, Self::Rejection> {
         let Some(header_value) = parts.headers.get("bearer") else {
             return Err((StatusCode::UNAUTHORIZED, "Missing auth token"));
@@ -64,5 +65,18 @@ pub(crate) async fn require_admin(
         return (StatusCode::FORBIDDEN, "insufficient priviledges")
             .into_response();
     }
+    next.run(req).await
+}
+
+pub(crate) async fn require_sub(
+    auth_user: AuthUser,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    if auth_user.permission != "subscribe" && auth_user.permission != "admin" {
+        return (StatusCode::FORBIDDEN, "insufficient priviledges")
+            .into_response();
+    }
+    req.extensions_mut().insert(auth_user);
     next.run(req).await
 }

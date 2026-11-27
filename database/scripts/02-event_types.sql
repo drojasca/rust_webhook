@@ -1,3 +1,5 @@
+DROP TABLE IF EXISTS event_types CASCADE;
+
 CREATE TABLE IF NOT EXISTS event_types (
     event_type TEXT PRIMARY KEY,
     event_schema JSONB NOT NULL
