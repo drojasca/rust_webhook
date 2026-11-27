@@ -1,5 +1,7 @@
 mod api_key;
+mod auth;
 
+use axum::middleware::from_fn_with_state;
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use jsonschema::Validator;
 use lapin::{Channel, Connection, ConnectionProperties};
@@ -48,9 +50,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app: Router = Router::new()
         .route("/event", post(event_handler).with_state(event_state))
         .route(
-            "/create/subscribe",
-            post(create_sub_handler).with_state(database_state),
+            "/create/subscriber",
+            post(create_sub_handler).with_state(database_state.clone()),
+        )
+        .route(
+            "/create/publisher",
+            post(create_pub_handler)
+                .with_state(database_state.clone())
+                .layer(from_fn_with_state(
+                    database_state.clone(),
+                    auth::require_admin,
+                )),
         );
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 
@@ -123,6 +135,28 @@ async fn create_sub_handler(
         VALUES ($1, $2)",
         key_hash,
         "subscribe"
+    )
+    .execute(&state.pool)
+    .await
+    .map(|err| {
+        tracing::error!("Failed to execute query: {:?}", err);
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+    });
+    let res = ApiKey { api_key };
+    Ok(Json(res))
+}
+
+async fn create_pub_handler(
+    State(state): State<DatabaseState>,
+) -> Result<Json<ApiKey>, (StatusCode, &'static str)> {
+    let api_key = api_key::generate_api_key(api_key::Permission::Publisher);
+    let key_hash = api_key::hash_key(&api_key);
+
+    let _ = sqlx::query!(
+        "INSERT INTO api_keys (key_hash, permission)
+        VALUES ($1, $2)",
+        key_hash,
+        "publish"
     )
     .execute(&state.pool)
     .await
